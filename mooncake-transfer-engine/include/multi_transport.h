@@ -98,6 +98,28 @@ class MultiTransport {
                           const std::vector<TransferRequest> &entries,
                           std::vector<size_t> *task_sizes);
 
+    // Stamp a task's submission time and direction for the metrics. Called
+    // before the task is posted to its transport, so that a task which the
+    // transport completes during submitTransferTask() still gets a latency.
+    // No-op unless WITH_METRICS and metrics are collecting.
+    static void markTaskSubmitted(Transport::TransferTask &task,
+                                  const TransferRequest &request);
+
+    // Record the terminal metrics for `task` exactly once, on the first poll
+    // that observes a terminal `status`. Called from getTransferStatus(), which
+    // both the per-task and the batch status APIs funnel through. A task no
+    // poll ever observes as terminal is not recorded (see
+    // TransferEngineMetrics). TIMEOUT is ignored here: per-task callers keep
+    // polling and the real outcome is recorded later.
+    static void recordTaskTerminal(Transport::TransferTask &task,
+                                   const TransferStatus &status);
+
+    // Record `task` as a failure exactly once. Called from
+    // getBatchTransferStatus() for a TIMEOUT task, because the batch API turns
+    // that into a final FAILED for the whole batch and the caller stops
+    // polling.
+    static void recordTaskBatchTimeout(Transport::TransferTask &task);
+
     Status selectTransport(const TransferRequest &entry, Transport *&transport);
 
 #ifdef ENABLE_MULTI_PROTOCOL
@@ -107,6 +129,10 @@ class MultiTransport {
 #endif
 
    private:
+    // Shared tail of the two recorders above: the once-flag and the counters.
+    static void recordTaskOutcome(Transport::TransferTask &task,
+                                  const TransferStatus &status);
+
     std::shared_ptr<TransferMetadata> metadata_;
     std::string local_server_name_;
     std::map<std::string, std::shared_ptr<Transport>> transport_map_;

@@ -20,6 +20,9 @@
 
 #include "config.h"
 #include "multi_transport_locality.h"
+#ifdef WITH_METRICS
+#include "transfer_engine_metrics.h"
+#endif
 #include "transport/rdma_transport/rdma_transport.h"
 #include "transport/rdma_twosided/rdma_twosided_transport.h"
 #ifdef USE_BAREX
@@ -131,6 +134,99 @@ Status MultiTransport::freeBatchID(BatchID batch_id,
     return Status::OK();
 }
 
+#ifdef WITH_METRICS
+
+namespace {
+TransferEngineMetrics::Direction directionOf(
+    Transport::TransferRequest::OpCode opcode) {
+    return opcode == Transport::TransferRequest::READ
+               ? TransferEngineMetrics::Direction::Read
+               : TransferEngineMetrics::Direction::Write;
+}
+}  // namespace
+
+void MultiTransport::markTaskSubmitted(Transport::TransferTask& task,
+                                       const TransferRequest& request) {
+    if (!TransferEngineMetrics::instance().isRecording()) return;
+    if (task.start_time.time_since_epoch().count() != 0) return;
+    task.metrics_opcode = request.opcode;
+    // Shared with the legacy periodic log line in TransferEngineImpl, which
+    // used to stamp it after submit returned; stamping here, before the post,
+    // also covers tasks the transport finishes during submitTransferTask().
+    task.start_time = std::chrono::steady_clock::now();
+}
+
+void MultiTransport::recordTaskTerminal(Transport::TransferTask& task,
+                                        const TransferStatus& status) {
+    // TIMEOUT is not terminal for a per-task poll. getTransferStatus()
+    // reports it for a task whose slices have been in flight past
+    // MC_SLICE_TIMEOUT and still are (is_finished stays false), and callers
+    // keep polling; the task's real outcome arrives on a later poll and is
+    // recorded then. Counting it here would book a failure and then drop the
+    // completion behind the once-flag. The batch API is different: it turns
+    // a TIMEOUT task into a final FAILED for the whole batch, so
+    // getBatchTransferStatus() records that task through
+    // recordTaskBatchTimeout() instead.
+    if (status.s != Transport::TransferStatusEnum::COMPLETED &&
+        status.s != Transport::TransferStatusEnum::FAILED &&
+        status.s != Transport::TransferStatusEnum::CANCELED) {
+        return;
+    }
+    recordTaskOutcome(task, status);
+}
+
+void MultiTransport::recordTaskBatchTimeout(Transport::TransferTask& task) {
+    TransferStatus failed;
+    failed.s = Transport::TransferStatusEnum::FAILED;
+    failed.transferred_bytes = 0;
+    recordTaskOutcome(task, failed);
+}
+
+void MultiTransport::recordTaskOutcome(Transport::TransferTask& task,
+                                       const TransferStatus& status) {
+    // Unstamped: metrics were off when the task was submitted, so there is no
+    // submission time to measure from.
+    const auto start = task.start_time;
+    if (start.time_since_epoch().count() == 0) return;
+    // Plain load first: getBatchTransferStatus() re-polls every task until
+    // its whole batch is done, and that steady state should not pay a
+    // read-modify-write per recorded task per poll.
+    if (__atomic_load_n(&task.metrics_recorded, __ATOMIC_ACQUIRE)) return;
+    // A task the transport refused before creating any slice. submit already
+    // returned the error to the caller and no transfer happened, but every
+    // real transport reports such a task as COMPLETED with 0 bytes (success +
+    // failed == slice_count == 0), which must not count as one.
+    if (__atomic_load_n(&task.slice_count, __ATOMIC_ACQUIRE) == 0) return;
+    // Exactly once per task, however many times it is polled and from
+    // whichever status API.
+    if (__atomic_exchange_n(&task.metrics_recorded, true, __ATOMIC_ACQ_REL)) {
+        return;
+    }
+
+    auto& metrics = TransferEngineMetrics::instance();
+    auto direction = directionOf(task.metrics_opcode);
+    if (status.s == Transport::TransferStatusEnum::COMPLETED) {
+        auto latency = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start);
+        metrics.recordCompleted(direction, status.transferred_bytes,
+                                static_cast<uint64_t>(latency.count()));
+    } else {
+        metrics.recordFailed(direction);
+    }
+}
+
+#else  // !WITH_METRICS
+
+void MultiTransport::markTaskSubmitted(Transport::TransferTask&,
+                                       const TransferRequest&) {}
+void MultiTransport::recordTaskTerminal(Transport::TransferTask&,
+                                        const TransferStatus&) {}
+void MultiTransport::recordTaskBatchTimeout(Transport::TransferTask&) {}
+void MultiTransport::recordTaskOutcome(Transport::TransferTask&,
+                                       const TransferStatus&) {}
+
+#endif  // WITH_METRICS
+
 Status MultiTransport::submitTransfer(
     BatchID batch_id, const std::vector<TransferRequest>& entries) {
     return submitTransfer(batch_id, entries, nullptr);
@@ -166,8 +262,12 @@ Status MultiTransport::submitTransfer(
         const auto group_id = entries[i].task_group_id;
         if (task_sizes && group_id != TransferRequest::kNoTaskGroup &&
             transports[i]->supportsGroupedScatter()) {
+            // A grouped task is recorded once in the metrics, under the
+            // opcode of its first request, so a group is also cut where the
+            // direction changes.
             while (i + count < entries.size() &&
                    entries[i + count].task_group_id == group_id &&
+                   entries[i + count].opcode == entries[i].opcode &&
                    transports[i + count] == transports[i])
                 ++count;
         }
@@ -183,6 +283,7 @@ Status MultiTransport::submitTransfer(
 #ifdef USE_EVENT_DRIVEN_COMPLETION
         if (count > 1) task.submission_sealed = false;
 #endif
+        markTaskSubmitted(task, entries[i]);
         submit_tasks[transports[i]].push_back(&task);
         if (task_sizes) task_sizes->push_back(count);
         i += count;
@@ -246,6 +347,7 @@ Status MultiTransport::mp_submitTransfer(
 #else
         task.request = &request;
 #endif
+        markTaskSubmitted(task, request);
         ++task_id;
         submit_tasks[transport].push_back(&task);
     }
@@ -305,6 +407,9 @@ Status MultiTransport::getTransferStatus(BatchID batch_id, size_t task_id,
             checkSliceTimeout(task)) {
             status.s = Transport::TransferStatusEnum::TIMEOUT;
         }
+        // Record here rather than at the call sites: getBatchTransferStatus()
+        // also polls through this function, so both status APIs are covered.
+        recordTaskTerminal(task, status);
         return Status::OK();
     }
 
@@ -332,6 +437,7 @@ Status MultiTransport::getTransferStatus(BatchID batch_id, size_t task_id,
             status.s = Transport::TransferStatusEnum::WAITING;
         }
     }
+    recordTaskTerminal(task, status);
     return Status::OK();
 }
 
@@ -399,8 +505,15 @@ Status MultiTransport::getBatchTransferStatus(BatchID batch_id,
         if (task_status.s == Transport::TransferStatusEnum::COMPLETED) {
             status.transferred_bytes += task_status.transferred_bytes;
             success_count++;
-        } else if (task_status.s == Transport::TransferStatusEnum::FAILED ||
-                   task_status.s == Transport::TransferStatusEnum::TIMEOUT) {
+        } else if (task_status.s == Transport::TransferStatusEnum::FAILED) {
+            status.s = Transport::TransferStatusEnum::FAILED;
+            return Status::OK();
+        } else if (task_status.s == Transport::TransferStatusEnum::TIMEOUT) {
+            // The batch is reported FAILED for good: callers treat that as
+            // final and free the batch, so no later poll will observe this
+            // task. Book it as the failure the caller sees. (The once-flag
+            // means a caller that does re-poll the task cannot double count.)
+            recordTaskBatchTimeout(batch_desc.task_list[task_id]);
             status.s = Transport::TransferStatusEnum::FAILED;
             return Status::OK();
         }

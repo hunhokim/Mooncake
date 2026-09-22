@@ -353,7 +353,25 @@ class Transport {
         Transport *transport_ = nullptr;
 
 #ifdef WITH_METRICS
+        // Submission timestamp, stamped by MultiTransport before the task is
+        // posted to its transport and never written again, so concurrent
+        // pollers can read it without synchronization. Zero means "not
+        // stamped" (metrics off at submit time). Read by the Prometheus
+        // recorder in MultiTransport::getTransferStatus() and by the legacy
+        // periodic log line in TransferEngineImpl::getTransferStatus(); each
+        // has its own once-flag below.
         std::chrono::steady_clock::time_point start_time;
+        // Direction of the originating request, captured at submit time so that
+        // terminal recording does not have to dereference `request`, which
+        // points into the caller's entries vector.
+        TransferRequest::OpCode metrics_opcode = TransferRequest::READ;
+        // Set exactly once, when this task's terminal metrics have been
+        // recorded. Accessed with __atomic builtins (like is_finished above) so
+        // that concurrent pollers cannot double count; a std::atomic member
+        // would make TransferTask non-movable and break task_list.resize().
+        volatile bool metrics_recorded = false;
+        // Same, for the legacy periodic log line's counters.
+        volatile bool legacy_metrics_recorded = false;
 #endif
 
 #ifdef USE_EVENT_DRIVEN_COMPLETION
