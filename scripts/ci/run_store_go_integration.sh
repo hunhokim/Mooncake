@@ -54,6 +54,12 @@ linker_flags=(
     -lmooncake_common
     -Wl,--end-group
 )
+# libtransfer_engine_metrics: the classic TE metrics singleton, referenced from
+# libtransfer_engine.a and built with WITH_METRICS (the default). Mirrors
+# mooncake-store/go/build.sh: probe for the library, not a cache spelling.
+if ls "$GITHUB_WORKSPACE"/build/mooncake-transfer-engine/src/libtransfer_engine_metrics.* >/dev/null 2>&1; then
+    linker_flags+=(-ltransfer_engine_metrics)
+fi
 linker_flags+=(
     -lasio -letcd_wrapper -lstdc++ -lnuma -lglog -lgflags -libverbs -lmlx5
     -ljsoncpp -lzstd -lcurl -luring

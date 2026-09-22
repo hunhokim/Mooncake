@@ -265,6 +265,13 @@ fn main() {
     // Dependencies of mooncake_store that must be satisfied at link time.
     // The list mirrors what mooncake-store/src/CMakeLists.txt links against.
     println!("cargo:rustc-link-lib=transfer_engine");
+    // libtransfer_engine_metrics.so: the classic TE metrics singleton, built
+    // under mooncake-transfer-engine/src (already a search dir above) only
+    // with WITH_METRICS.
+    let te_lib_dir = build_dir.join("mooncake-transfer-engine/src");
+    if has_library(std::slice::from_ref(&te_lib_dir), &["transfer_engine_metrics"]) {
+        println!("cargo:rustc-link-lib=transfer_engine_metrics");
+    }
     println!("cargo:rustc-link-lib=mooncake_common"); // Environ::Get() and other common utilities
     println!("cargo:rustc-link-lib=base"); // mooncake::Status etc.
     println!("cargo:rustc-link-lib=asio"); // shared library built by mooncake-common

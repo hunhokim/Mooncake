@@ -278,6 +278,12 @@ fn main() {
         if has_library(&search_dirs, "tent_metrics") {
             println!("cargo:rustc-link-arg=-ltent_metrics");
         }
+        // libtransfer_engine_metrics.so: the classic TE metrics singleton,
+        // SHARED for the same reason as tent_metrics. Built under
+        // mooncake-transfer-engine/src, already on the search path.
+        if has_library(&search_dirs, "transfer_engine_metrics") {
+            println!("cargo:rustc-link-arg=-ltransfer_engine_metrics");
+        }
         println!("cargo:rustc-link-arg=-Wl,--end-group");
         println!("cargo:rustc-link-lib=dl");
         if has_library(&search_dirs, "uring") {
@@ -286,6 +292,9 @@ fn main() {
     } else {
         println!("cargo:rustc-link-lib=static=transfer_engine");
         println!("cargo:rustc-link-lib=static=base");
+        if has_library(&search_dirs, "transfer_engine_metrics") {
+            println!("cargo:rustc-link-lib=transfer_engine_metrics");
+        }
         if has_mooncake_common {
             println!("cargo:rustc-link-lib=static=mooncake_common");
         }

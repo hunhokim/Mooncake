@@ -769,11 +769,19 @@ if(WITH_STORE_C_SHARED)
   add_dependencies(mooncake_store_c mooncake_store asio_static)
   # Whole-archive the static lib + asio_static via file paths (no interface-dep
   # propagation); re-list the mooncake_store target for its transitive deps.
-  # --as-needed drops the now-redundant transitive libasio.so.
+  # --as-needed drops the now-redundant transitive libasio.so. The classic TE
+  # metrics get the same treatment (static twin absorbed, shared lib dropped)
+  # when WITH_METRICS built them.
+  set(_store_c_absorbed "$<TARGET_FILE:asio_static>")
+  if(TARGET transfer_engine_metrics_static)
+    add_dependencies(mooncake_store_c transfer_engine_metrics_static)
+    list(APPEND _store_c_absorbed
+         "$<TARGET_FILE:transfer_engine_metrics_static>")
+  endif()
   target_link_libraries(
     mooncake_store_c
     PRIVATE -Wl,--whole-archive "$<TARGET_FILE:mooncake_store>"
-            "$<TARGET_FILE:asio_static>" -Wl,--no-whole-archive -Wl,--as-needed
+            ${_store_c_absorbed} -Wl,--no-whole-archive -Wl,--as-needed
             mooncake_store)
   # Export only the C ABI; the version script localizes every other symbol
   # pulled from the static archives. Strip debug info in Release (it dominates

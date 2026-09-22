@@ -48,6 +48,13 @@ CGO_LDFLAGS+=" -L${BUILD_DIR}/mooncake-common"
 CGO_LDFLAGS+=" -L${BUILD_DIR}/mooncake-common/src"
 CGO_LDFLAGS+=" -Wl,--start-group -lmooncake_store -lmooncake_local_ssd -lcachelib_memory_allocator -ltransfer_engine -lbase -lmooncake_common -Wl,--end-group"
 CGO_LDFLAGS+=" -lasio -lxxhash -lyaml-cpp"
+# libtransfer_engine_metrics: the classic TE metrics singleton, referenced from
+# libtransfer_engine.a and only built with WITH_METRICS (the default). Probe for
+# the library itself, as the Rust build.rs files do: the CMake cache keeps
+# whatever spelling the configure line used (ON, 1, TRUE, ...).
+if ls "${BUILD_DIR}"/mooncake-transfer-engine/src/libtransfer_engine_metrics.* >/dev/null 2>&1; then
+    CGO_LDFLAGS+=" -ltransfer_engine_metrics"
+fi
 CGO_LDFLAGS+=" -lstdc++ -lnuma -lglog -lgflags -libverbs -lmlx5 -ljsoncpp -lzstd -lcurl -lm"
 
 # OSS adapter request signing uses OpenSSL HMAC (EVP_sha256). Static archives

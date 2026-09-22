@@ -99,6 +99,13 @@ if [ -f ${BUILD_DIR}/mooncake-transfer-engine/src/libtransfer_engine.so ]; then
     cp ${BUILD_DIR}/mooncake-transfer-engine/src/libtransfer_engine.so mooncake-wheel/mooncake/libtransfer_engine.so
 fi
 
+# Copy libtransfer_engine_metrics.so to mooncake directory (only when WITH_METRICS is set).
+# Always a shared library so engine.so and store.so share one metrics singleton.
+if [ -f ${BUILD_DIR}/mooncake-transfer-engine/src/libtransfer_engine_metrics.so ]; then
+    echo "Copying libtransfer_engine_metrics.so..."
+    cp ${BUILD_DIR}/mooncake-transfer-engine/src/libtransfer_engine_metrics.so mooncake-wheel/mooncake/libtransfer_engine_metrics.so
+fi
+
 # Copy ascend_transport.so to mooncake directory (only when USE_ASCEND_DIRECT is set)
 if [ -f ${BUILD_DIR}/mooncake-transfer-engine/src/transport/ascend_transport/ascend_transport.so ]; then
     echo "Copying ascend_transport.so..."
