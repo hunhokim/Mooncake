@@ -520,10 +520,134 @@ For advanced users, TransferEngine provides the following advanced runtime optio
 - `MC_TCP_ENABLE_CONNECTION_POOL` Enable TCP Connection Pool to avoid excessive sockets.
 - `MC_TCP_SLICE_SIZE` The segmentation granularity (in bytes) of TCP transport for splitting large transfers into socket read/write operations. Corresponds to `MC_SLICE_SIZE` for RDMA. Default value 65536 (64KB).
 - `MC_TCP_PROTO` When set to `1`, TCP initiators use the legacy unacknowledged framing even against servers that support acknowledged framing (protocol v2). Under v2 (the default against v2-capable servers), a WRITE completes only after the receiver confirms the payload has been applied to destination memory, and server-side rejections surface as failed transfers instead of silent data loss. Use this variable only as a rollback escape hatch during mixed-version upgrades.
+- `MC_TE_METRIC` Enable Transfer Engine metrics (accepted values: `1`, `true`, `yes`, `on`). Disabled by default. Turns on both the periodic latency/throughput log line and the Prometheus metrics described in [Metrics](#metrics).
+- `MC_TE_METRIC_INTERVAL_SECONDS` Interval in seconds for the periodic metrics log line. Default value 5. Must be positive.
+- `MC_TE_METRIC_HTTP_PORT` TCP port for the metrics HTTP server. Default value 0, which leaves the server disabled; metrics are still collected and readable in-process. Set a positive port to expose `/metrics`, `/metrics/summary`, `/metrics/json` and `/health`.
+- `MC_TE_METRIC_HTTP_HOST` Bind address for the metrics HTTP server. Default value `0.0.0.0`, matching TENT. Set `127.0.0.1` to keep the endpoint host-local.
+- `MC_TE_METRIC_HTTP_THREADS` Number of HTTP server worker threads. Default value 1; `0` is treated as 1.
+- `MC_TE_METRIC_REPORT_INTERVAL_SECONDS` Interval for an additional summary log line emitted by the metrics exporter. Default value 0 (disabled), because Classic TE already logs its own line on `MC_TE_METRIC_INTERVAL_SECONDS`.
 
 ## C++ API Reference
 
 For the complete C++ API reference, see [Transfer Engine C++ API](../../api-reference/cpp/index).
+
+(metrics)=
+## Metrics
+
+The Classic Transfer Engine exports Prometheus metrics through a
+component-agnostic exporter in
+`mooncake-transfer-engine/include/metrics_exporter.h`, which holds the metric
+registry, the endpoints, the serialization and the collecting switch.
+It serves the same four endpoints, in the same formats, as TENT's own metrics
+system:
+
+| Endpoint | Content |
+|----------|---------|
+| `/metrics` | Prometheus text format |
+| `/metrics/summary` | Human-readable one-line summary |
+| `/metrics/json` | JSON |
+| `/health` | `OK` |
+
+Metrics are compiled in when the project is built with `-DWITH_METRICS=ON` (the
+default), collected when `MC_TE_METRIC` is enabled, and served over HTTP when
+`MC_TE_METRIC_HTTP_PORT` is set. Unlike TENT's metrics, no separate build flag is
+required: Classic TE metrics do not depend on `USE_TENT`.
+
+If that port cannot be bound — it is already taken, or two co-located ranks were
+given the same one — collection continues in-process and the failure is logged;
+only the HTTP endpoint is lost, so the scrape target stays down rather than
+serving stale or partial data.
+
+One quirk of the underlying `yalantinglibs` serializer: a histogram is left out
+of `/metrics` entirely until its accumulated sum is nonzero, so
+`mooncake_te_*_latency_us` and `mooncake_te_*_size_bytes` can be briefly absent
+on a freshly started process. `/metrics/json` reports their sample counts
+throughout.
+
+The metric set follows TENT's read/write split, with the same units and
+bucket boundaries, under a `mooncake_te_` prefix (the series themselves are
+separate: TENT's are labeled per transport, these are not):
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `mooncake_te_read_bytes_total`, `mooncake_te_write_bytes_total` | Counter | Bytes transferred by tasks observed completed |
+| `mooncake_te_read_requests_total`, `mooncake_te_write_requests_total` | Counter | Tasks observed in a terminal state (completed + failed) |
+| `mooncake_te_read_failures_total`, `mooncake_te_write_failures_total` | Counter | Tasks observed failed, canceled or timed out |
+| `mooncake_te_read_latency_us`, `mooncake_te_write_latency_us` | Histogram | Latency of tasks observed completed, in microseconds |
+| `mooncake_te_read_size_bytes`, `mooncake_te_write_size_bytes` | Histogram | Size distribution of tasks observed completed, in bytes |
+
+### What is recorded
+
+The metrics are **observation-based**. A task is recorded exactly
+once, at the first status query that observes it in a terminal state.
+Recording happens in `MultiTransport::getTransferStatus()`, which both the
+per-task (`getTransferStatus`) and batch (`getBatchTransferStatus`) APIs
+funnel through, so it does not matter which API the application polls, and
+repeated polling never double counts. `TIMEOUT` is treated differently by
+the two APIs. A per-task poll reports it for a task whose slices have been in
+flight past `MC_SLICE_TIMEOUT`; the task stays in flight, the caller keeps
+polling, and its eventual completion or failure is what gets recorded. A batch
+poll instead turns a `TIMEOUT` task into a final `FAILED` for the whole batch,
+so that task is recorded as a failure right there. Within what is observed:
+
+```
+requests_total = latency_us_count + failures_total
+```
+
+Latency is measured from just before the task is posted to its transport to
+the first poll that sees it completed. It therefore includes any delay between
+completion and the caller's next poll, and is best read as the latency the
+application experiences rather than the fabric's.
+
+A task that no poll ever observes as terminal is **not recorded**. This
+happens when a caller stops polling a batch after `getBatchTransferStatus()`
+reports an aggregate `FAILED` while sibling tasks are still in flight, when a
+caller abandons a batch after a failed submit, or when event-driven completion
+(`USE_EVENT_DRIVEN_COMPLETION`) wakes the caller without a status call. There
+is consequently no in-flight gauge and no identity between submissions and
+recorded outcomes; the counters describe observed engine-task outcomes, and an
+application-level retry that resubmits a transfer counts as a new task.
+
+Two consequences for interpretation. The failure ratio
+`failures_total / requests_total` covers observed outcomes only, not every
+attempted transfer. And during incidents callers tend to abandon precisely the
+transfers that are stuck, so an apparently healthy latency histogram is not by
+itself evidence that all is well; read it together with the engine's error
+logs, which do not depend on polling. A task the transport refuses before
+creating any slice surfaces only as the error returned by `submitTransfer()`:
+transports report such a task as `COMPLETED` with zero bytes, and the recorder
+skips tasks with no slices so that a caller who polls anyway does not turn the
+refusal into a recorded transfer.
+
+A grouped scatter task (`submitScatter`) is recorded once, under the opcode of
+its first request; grouping therefore also stops where the direction changes,
+so a mixed read/write scatter yields one task per run of same-direction
+requests.
+
+This is a narrower contract than TENT's, deliberately. TENT keeps a central
+task lifecycle with explicit terminal transitions that metrics can attach to.
+In Classic, completion is spread across slice counters and transport-specific
+status handling, a submission can fail after part of the batch has been
+posted, and a batch failure can be reported while siblings are still active.
+Accounting for every submission would mean hooking slice completion, sealing
+submissions, rolling back partial failures and settling at batch free; the
+status-query path is the one place Classic already reports a task's outcome to
+its caller, and recording there keeps the metrics to a small, understandable
+boundary.
+
+### Deriving transfer speed
+
+Because both the size and latency histograms export a `_sum`, average throughput
+over a window is a ratio of increases — the latency sum is in microseconds:
+
+```promql
+increase(mooncake_te_read_size_bytes_sum[2m])
+  / (increase(mooncake_te_read_latency_us_sum[2m]) / 1e6)
+```
+
+This is per-transfer throughput (bytes moved divided by time spent moving them),
+which is the useful signal for watching fabric health; it is not the same as
+aggregate node bandwidth, since concurrent transfers overlap in wall-clock time.
 
 ## Supported Protocols
 
