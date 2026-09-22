@@ -102,6 +102,9 @@ DEFINE_uint64(buffer_size, 1ull << 30, "total size of data buffer");
 DEFINE_int32(batch_size, 128, "Batch size");
 DEFINE_uint64(block_size, 65536, "Block size for each transfer request");
 DEFINE_int32(duration, 10, "Test duration in seconds");
+DEFINE_int32(linger, 0,
+             "Initiator: seconds to stay alive after the test completes, so "
+             "an external scraper can read the final metrics");
 DEFINE_int32(threads, 12, "Task submission threads");
 DEFINE_bool(auto_discovery, false, "Enable auto discovery");
 DEFINE_string(report_unit, "GB", "Report unit: GB|GiB|Gb|MB|MiB|Mb|KB|KiB|Kb");
@@ -573,6 +576,8 @@ int initiator() {
                      batch_count * FLAGS_batch_size * FLAGS_block_size,
                      duration);
 
+    if (FLAGS_linger > 0) sleep(FLAGS_linger);
+
     for (int i = 0; i < buffer_num; ++i) {
         engine->unregisterLocalMemory(addr[i]);
     }
@@ -614,6 +619,10 @@ int target() {
                                              getLocationName(i));
         LOG_ASSERT(!rc);
     }
+
+    // Everything an initiator needs is in place only now; the metrics
+    // endpoint above answers earlier, during engine construction.
+    LOG(INFO) << "Target ready";
 
     while (target_running) sleep(1);
 

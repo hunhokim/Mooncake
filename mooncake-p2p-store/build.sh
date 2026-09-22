@@ -36,6 +36,10 @@ EXT_LDFLAGS+=" -L$BUILD_DIR/mooncake-transfer-engine/src/common/base"
 EXT_LDFLAGS+=" -L$BUILD_DIR/mooncake-common"
 EXT_LDFLAGS+=" -L$BUILD_DIR/mooncake-common/src"
 EXT_LDFLAGS+=" -ltransfer_engine -lbase -lasio -lstdc++ -lnuma -lglog -libverbs -lmlx5 -ljsoncpp -lmooncake_common -lm"
+# Classic TE metrics are built only with WITH_METRICS, matching the Store Go bindings.
+if ls "${BUILD_DIR}"/mooncake-transfer-engine/src/libtransfer_engine_metrics.* >/dev/null 2>&1; then
+    EXT_LDFLAGS+=" -ltransfer_engine_metrics"
+fi
 
 if [ -d "/usr/local/cuda/lib64/stubs" ]; then
     EXT_LDFLAGS+=" -L/usr/local/cuda/lib64/stubs"
