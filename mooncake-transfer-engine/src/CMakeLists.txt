@@ -2,6 +2,12 @@ file(GLOB ENGINE_SOURCES "*.cpp" "shared_segment/*.cpp")
 set(TRANSFER_METADATA_PLUGIN_SOURCES config.cpp transfer_metadata_plugin.cpp)
 list(REMOVE_ITEM ENGINE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/config.cpp"
      "${CMAKE_CURRENT_SOURCE_DIR}/transfer_metadata_plugin.cpp")
+# The metrics TUs build into their own shared library (transfer_engine_metrics,
+# below), never into transfer_engine itself. With WITH_METRICS off they have no
+# callers at all: every include of transfer_engine_metrics.h is guarded.
+set(TRANSFER_ENGINE_METRICS_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/metrics_exporter.cpp")
+list(REMOVE_ITEM ENGINE_SOURCES ${TRANSFER_ENGINE_METRICS_SOURCES})
 # ibv_port_attr::active_speed is a uint8_t and reads 0 for XDR (encoding 256);
 # newer rdma-core adds active_speed_ex to carry it. TENT probes the same cache
 # variable in tent/src; this definition covers the classic RdmaContext under
@@ -66,6 +72,33 @@ if(USE_HTTP)
   target_link_libraries(transfer_metadata_plugin PRIVATE ${CURL_LIBRARIES})
 endif()
 
+if(WITH_METRICS)
+  # SHARED so the TransferEngineMetrics singleton (the function-local static in
+  # TransferEngineMetrics::instance()) exists once per process. transfer_engine
+  # follows BUILD_SHARED_LIBS and is static by default, so it is copied into
+  # every consumer .so; the python extensions engine.so and store.so would then
+  # each carry their own singleton and exporter: split counters, two report
+  # threads, and a clash on the metrics HTTP port. Same reasoning and layout as
+  # tent_metrics (tent/src/metrics/CMakeLists.txt): $ORIGIN so the installed
+  # copy next to the extensions finds libasio.so, and no
+  # BUILD_WITH_INSTALL_RPATH so the build tree still resolves it for ctest.
+  add_library(transfer_engine_metrics SHARED ${TRANSFER_ENGINE_METRICS_SOURCES})
+  target_include_directories(
+    transfer_engine_metrics
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+           $<INSTALL_INTERFACE:include>)
+  set_target_properties(
+    transfer_engine_metrics PROPERTIES POSITION_INDEPENDENT_CODE ON
+                                       INSTALL_RPATH "$ORIGIN")
+  # yalantinglibs for the ylt metric types and coro_http server. ASIO symbols
+  # come from asio_shared only (ASIO_SEPARATE_COMPILATION is global), so this
+  # does not duplicate them.
+  target_link_libraries(
+    transfer_engine_metrics PUBLIC asio_shared yalantinglibs::yalantinglibs
+                                   glog::glog pthread)
+  install(TARGETS transfer_engine_metrics DESTINATION lib)
+endif()
+
 add_library(transfer_engine ${ENGINE_SOURCES} $<TARGET_OBJECTS:transport>)
 target_include_directories(
   transfer_engine
@@ -89,6 +122,9 @@ target_link_libraries(
          asio_shared
          yalantinglibs::yalantinglibs
   PRIVATE transport transfer_metadata_plugin)
+if(WITH_METRICS)
+  target_link_libraries(transfer_engine PUBLIC transfer_engine_metrics)
+endif()
 if(UNIX AND NOT APPLE)
   # shm_open/shm_unlink live in librt on glibc; OBJECT-library PRIVATE deps do
   # not propagate through $<TARGET_OBJECTS:shm_transport>.
