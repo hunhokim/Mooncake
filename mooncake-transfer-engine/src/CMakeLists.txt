@@ -6,7 +6,8 @@ list(REMOVE_ITEM ENGINE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/config.cpp"
 # below), never into transfer_engine itself. With WITH_METRICS off they have no
 # callers at all: every include of transfer_engine_metrics.h is guarded.
 set(TRANSFER_ENGINE_METRICS_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/metrics_exporter.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/metrics_exporter.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/transfer_engine_metrics.cpp")
 list(REMOVE_ITEM ENGINE_SOURCES ${TRANSFER_ENGINE_METRICS_SOURCES})
 # ibv_port_attr::active_speed is a uint8_t and reads 0 for XDR (encoding 256);
 # newer rdma-core adds active_speed_ex to carry it. TENT probes the same cache

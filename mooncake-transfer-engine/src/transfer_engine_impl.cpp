@@ -25,6 +25,8 @@
 #ifdef WITH_METRICS
 #include <iomanip>
 #include <sstream>
+
+#include "transfer_engine_metrics.h"
 #endif
 
 #include "transfer_metadata_plugin.h"
@@ -1122,6 +1124,14 @@ void TransferEngineImpl::InitializeMetricsConfig() {
                          << interval_env
                          << ", using default: " << metrics_interval_seconds_;
         }
+    }
+
+    // The Prometheus metrics share MC_TE_METRIC with the periodic log line,
+    // and are exported separately through the (optional) HTTP endpoint set by
+    // MC_TE_METRIC_HTTP_*. Starting the exporter is idempotent, so several
+    // engines in one process share one exporter and one port.
+    if (metrics_enabled_) {
+        TransferEngineMetrics::instance().initializeFromEnv();
     }
 }
 
