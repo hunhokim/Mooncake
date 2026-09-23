@@ -98,24 +98,6 @@ if(WITH_METRICS)
     transfer_engine_metrics PUBLIC asio_shared yalantinglibs::yalantinglibs
                                    glog::glog pthread)
   install(TARGETS transfer_engine_metrics DESTINATION lib)
-
-  # Static, PIC twin for the self-contained libmooncake_store.so (see
-  # WITH_STORE_C_SHARED and asio_static): that .so absorbs the metrics objects
-  # instead of taking a DT_NEEDED on libtransfer_engine_metrics.so. The shared
-  # library above stays the one everything else links, so a process that also
-  # loads the python extensions keeps a single singleton.
-  if(WITH_STORE_C_SHARED)
-    add_library(transfer_engine_metrics_static STATIC
-                ${TRANSFER_ENGINE_METRICS_SOURCES})
-    target_include_directories(
-      transfer_engine_metrics_static
-      PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>)
-    set_target_properties(transfer_engine_metrics_static
-                          PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_link_libraries(
-      transfer_engine_metrics_static
-      PUBLIC asio_static yalantinglibs::yalantinglibs glog::glog pthread)
-  endif()
 endif()
 
 add_library(transfer_engine ${ENGINE_SOURCES} $<TARGET_OBJECTS:transport>)

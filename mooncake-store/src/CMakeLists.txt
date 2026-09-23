@@ -728,12 +728,12 @@ endif()
 install(TARGETS mooncake_client DESTINATION bin)
 
 # ---------------------------------------------------------------------------
-# Optional: a self-contained libmooncake_store.so exporting only the store_c.h C
-# ABI, for consumers that dlopen the store (e.g. the Rust crate's `dlopen`
-# feature). Whole-archives the static mooncake_store + asio_static (objects are
-# -fPIC, see mooncake-common/common.cmake) and localizes everything else via the
-# version script; only system/toolkit libs (and the Go etcd/k8s backends when
-# enabled) stay DT_NEEDED.
+# Optional: libmooncake_store.so exporting only the store_c.h C ABI, for
+# consumers that dlopen the store (e.g. the Rust crate's `dlopen` feature).
+# Whole-archives the static mooncake_store + asio_static (objects are -fPIC, see
+# mooncake-common/common.cmake) and localizes everything else via the version
+# script. System/toolkit libs, the Go etcd/k8s backends when enabled, and the
+# process-wide Classic TE metrics library stay dynamically linked.
 # ---------------------------------------------------------------------------
 if(WITH_STORE_C_SHARED)
   # ELF/GNU-ld features (--whole-archive, --as-needed, version script, $ORIGIN);
@@ -769,19 +769,14 @@ if(WITH_STORE_C_SHARED)
   add_dependencies(mooncake_store_c mooncake_store asio_static)
   # Whole-archive the static lib + asio_static via file paths (no interface-dep
   # propagation); re-list the mooncake_store target for its transitive deps.
-  # --as-needed drops the now-redundant transitive libasio.so. The classic TE
-  # metrics get the same treatment (static twin absorbed, shared lib dropped)
-  # when WITH_METRICS built them.
-  set(_store_c_absorbed "$<TARGET_FILE:asio_static>")
-  if(TARGET transfer_engine_metrics_static)
-    add_dependencies(mooncake_store_c transfer_engine_metrics_static)
-    list(APPEND _store_c_absorbed
-         "$<TARGET_FILE:transfer_engine_metrics_static>")
-  endif()
+  # --as-needed drops the now-redundant direct dependency on libasio.so. Keep
+  # the transitive transfer_engine_metrics shared dependency: absorbing its
+  # objects here would hide a second singleton behind store_c.map and split
+  # counters from engine.so/store.so, with two exporters on one port.
   target_link_libraries(
     mooncake_store_c
     PRIVATE -Wl,--whole-archive "$<TARGET_FILE:mooncake_store>"
-            ${_store_c_absorbed} -Wl,--no-whole-archive -Wl,--as-needed
+            "$<TARGET_FILE:asio_static>" -Wl,--no-whole-archive -Wl,--as-needed
             mooncake_store)
   # Export only the C ABI; the version script localizes every other symbol
   # pulled from the static archives. Strip debug info in Release (it dominates

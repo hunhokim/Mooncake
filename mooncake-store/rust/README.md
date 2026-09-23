@@ -15,8 +15,8 @@ takes precedence:
 - **`dlopen`**: loads `libmooncake_store.so` at run time via `libloading`, using
   **committed, pre-generated** bindings (`src/generated/ffi_dlopen_bindings.rs`).
   A consumer needs only `libloading` — no bindgen, no `store_c.h`, no libclang,
-  no C++ linking — and only the shared library at run time. Maintainers
-  regenerate the bindings after the C ABI changes (see below):
+  no C++ linking — and the shared library and its dependencies at run time.
+  Maintainers regenerate the bindings after the C ABI changes (see below):
 
   ```toml
   mooncake_store = { version = "0.1", default-features = false, features = ["dlopen"] }
@@ -28,6 +28,14 @@ takes precedence:
   `libmooncake_store.so`, resolved through the OS loader search path), or pin an
   explicit path with `mooncake_store::load_library(path)` before creating a
   store. The public API is identical to the `link` backend.
+
+  With `WITH_METRICS=ON` (the default), also deploy
+  `libtransfer_engine_metrics.so` and `libasio.so` next to
+  `libmooncake_store.so`. CMake installs these libraries together under `lib/`,
+  and their `$ORIGIN` runtime paths resolve the adjacent dependencies. The
+  shared metrics library keeps one Classic Transfer Engine registry and HTTP
+  exporter when the C library and Python extensions are loaded in one process.
+  `WITH_METRICS=OFF` removes this metrics dependency.
 
   Regenerate the committed bindings after the C ABI (`store_c.h`) changes:
 

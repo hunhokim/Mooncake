@@ -26,7 +26,7 @@ option(WITH_RUST_EXAMPLE
 option(WITH_STORE_RUST "build the Rust bindings for the Mooncake Store" ON)
 option(
   WITH_STORE_C_SHARED
-  "build a self-contained libmooncake_store.so exposing only the store_c.h C ABI (for dlopen consumers)"
+  "build libmooncake_store.so exposing only the store_c.h C ABI (for dlopen consumers)"
   OFF)
 option(WITH_EP "build mooncake with expert parallelism support" OFF)
 option(USE_NOF "build mooncake store with NoF SSD pool support" OFF)

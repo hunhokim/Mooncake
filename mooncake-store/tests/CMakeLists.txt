@@ -1,5 +1,19 @@
 set(MOONCAKE_STORE_TESTS_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
+if(WITH_STORE_C_SHARED AND WITH_METRICS)
+  # Load the actual C ABI library alongside a normally linked metrics consumer.
+  # Linking mooncake_store here would bypass the dlopen dependency graph.
+  add_executable(store_c_metrics_test store_c_metrics_test.cpp)
+  target_link_libraries(
+    store_c_metrics_test PRIVATE transfer_engine_metrics gtest_main
+                                 ${CMAKE_DL_LIBS})
+  target_compile_definitions(
+    store_c_metrics_test
+    PRIVATE MOONCAKE_STORE_C_LIBRARY="$<TARGET_FILE:mooncake_store_c>")
+  add_dependencies(store_c_metrics_test mooncake_store_c)
+  add_test(NAME store_c_metrics_test COMMAND store_c_metrics_test)
+endif()
+
 function(add_store_test name)
   add_executable(${name} ${ARGN})
   target_include_directories(${name} PRIVATE ${MOONCAKE_STORE_TESTS_SOURCE_DIR})
@@ -198,7 +212,8 @@ add_store_test(tenant_quota_ledger_test tenant_quota_ledger_test.cpp)
 add_store_test(tenant_id_test tenant_id_test.cpp)
 add_store_test(object_entry_test object_entry_test.cpp)
 add_store_test(object_index_test object_index_test.cpp)
-add_store_test(dynamic_replication_lease_table_test dynamic_replication_lease_table_test.cpp)
+add_store_test(dynamic_replication_lease_table_test
+               dynamic_replication_lease_table_test.cpp)
 add_store_test(group_index_test group_index_test.cpp)
 add_store_test(segment_test segment_test.cpp)
 add_executable(local_ssd_test local_ssd/local_ssd_test.cpp)
