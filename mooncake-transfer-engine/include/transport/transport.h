@@ -168,6 +168,13 @@ class Transport {
     struct Slice {
         enum SliceStatus { PENDING, POSTED, SUCCESS, TIMEOUT, FAILED };
 
+        struct RdmaCompletionToken {
+            uint64_t endpoint_id;
+            uint64_t selection_epoch;
+            bool valid;
+            bool observe_success;
+        };
+
         void *source_addr;
         size_t length;
         TransferRequest::OpCode opcode;
@@ -211,6 +218,7 @@ class Transport {
                 uint32_t retry_cnt;
                 uint32_t max_retry_cnt;
                 RdmaEndPoint *endpoint;  // Endpoint used for this transfer
+                RdmaCompletionToken auto_gid_token;
                 int qp_index;
             } rdma;
             struct {
@@ -475,7 +483,14 @@ class Transport {
         Transport *transport_ = nullptr;
 
 #ifdef WITH_METRICS
+        // Stamped once at submit and never cleared; zero means not stamped.
         std::chrono::steady_clock::time_point start_time;
+        TransferRequest::OpCode metrics_opcode = TransferRequest::READ;
+        // Separate flags until export and log collection are unified.
+        // Accessed with __atomic builtins like is_finished (std::atomic would
+        // make the task non-movable).
+        volatile bool export_metrics_recorded = false;
+        volatile bool log_metrics_recorded = false;
 #endif
 
         // record the origin request
