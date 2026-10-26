@@ -1,5 +1,35 @@
 set(WORKSPACE "${CMAKE_CURRENT_SOURCE_DIR}")
 
+if(MOONCAKE_ENABLE_ADAPTIVE_CONGESTION_CONTROL)
+  add_executable(adaptive_congestion_control_test
+                 ${WORKSPACE}/adaptive_congestion_control_test.cpp)
+  target_link_libraries(
+    adaptive_congestion_control_test PRIVATE adaptive_congestion_control_core
+                                             gtest gtest_main)
+  add_test(NAME adaptive_congestion_control_test
+           COMMAND adaptive_congestion_control_test)
+
+  add_executable(rdma_error_classifier_test
+                 ${WORKSPACE}/rdma_error_classifier_test.cpp)
+  target_link_libraries(
+    rdma_error_classifier_test PRIVATE adaptive_congestion_control_core gtest
+                                       gtest_main)
+  add_test(NAME rdma_error_classifier_test COMMAND rdma_error_classifier_test)
+
+  add_executable(adaptive_congestion_control_config_test
+                 ${WORKSPACE}/adaptive_congestion_control_config_test.cpp)
+  target_link_libraries(
+    adaptive_congestion_control_config_test
+    PRIVATE adaptive_congestion_control_core gtest gtest_main)
+  add_test(NAME adaptive_congestion_control_config_test
+           COMMAND adaptive_congestion_control_config_test)
+
+  add_executable(adaptive_congestion_control_benchmark
+                 ${WORKSPACE}/adaptive_congestion_control_benchmark.cpp)
+  target_link_libraries(adaptive_congestion_control_benchmark
+                        PRIVATE adaptive_congestion_control_core)
+endif()
+
 if(USE_HIP)
   file(GLOB TEST_SOURCES "*.cpp")
   hipify_files(TEST_SOURCES)
@@ -46,6 +76,20 @@ target_include_directories(
 target_link_libraries(flagcx_transport_internal_test PUBLIC gtest gtest_main)
 add_test(NAME flagcx_transport_internal_test
          COMMAND flagcx_transport_internal_test)
+
+if(WITH_METRICS)
+  add_executable(transfer_engine_metrics_test
+                 ${WORKSPACE}/transfer_engine_metrics_test.cpp)
+  target_link_libraries(transfer_engine_metrics_test PUBLIC transfer_engine
+                                                            gtest gtest_main)
+  add_test(NAME transfer_engine_metrics_test
+           COMMAND transfer_engine_metrics_test)
+
+  add_executable(metrics_exporter_test ${WORKSPACE}/metrics_exporter_test.cpp)
+  target_link_libraries(metrics_exporter_test PUBLIC transfer_engine gtest
+                                                     gtest_main)
+  add_test(NAME metrics_exporter_test COMMAND metrics_exporter_test)
+endif()
 
 add_executable(endpoint_store_test ${WORKSPACE}/endpoint_store_test.cpp)
 target_link_libraries(endpoint_store_test PUBLIC transfer_engine gtest
@@ -554,8 +598,8 @@ if(USE_ASCEND_DIRECT)
            COMMAND ascend_direct_transport_test)
 endif()
 
-# Multi-protocol transport test (only when ENABLE_MULTI_PROTOCOL is ON)
-if(ENABLE_MULTI_PROTOCOL)
+# This multi-protocol test directly uses CxlTransport and requires its backend.
+if(ENABLE_MULTI_PROTOCOL AND USE_CXL)
   add_executable(mp_transport_test ${WORKSPACE}/mp_transport_test.cpp)
   target_link_libraries(mp_transport_test PUBLIC transfer_engine gtest
                                                  gtest_main)
